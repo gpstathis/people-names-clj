@@ -2,45 +2,41 @@
   (:gen-class)
   (:require [clojure.java.io :as io]))
 
-;; Holds full name frequency counts
-(def full-freq {})
-;; Holds first name frequency counts
-(def fname-freq {})
-;; Holds last name frequency counts
-(def lname-freq {})
-;; Holds first N unique first names
-(def fname-unique [])
-;; Holds first N unique last names
-(def lname-unique [])
-
 (defn top-n
   "Sorts map m by descending key values and returns the top n entries"
   [m n]
   (take n (sort-by val > m)))
 
 (defn print-results
-  [n uniqueCount]
-  (println (format "Unique Full Names:  %5s" (count full-freq)))
-  (println (format "Unique First Names: %5s" (count fname-freq)))
-  (println (format "Unique Last Names:  %5s" (count lname-freq)))
-  (println)
-  (println (str "Top " n " First Names:"))
-  (doseq [fname (top-n fname-freq n)]
-    (println (format "%-10s %s" (fname 0) (fname 1))))
-  (println)
-  (println (str "Top " n " Last Names:"))
-  (doseq [lname (top-n lname-freq n)]
-    (println (format "%-10s %s" (lname 0) (lname 1))))
-  (println)
-  (println (str "First " uniqueCount " Unique Names:"))
-  (loop [i 0]
-    (when (< i uniqueCount)
-      (println (format "%-15s %s" (if (< i (- uniqueCount 1))
-                                      (get lname-unique (+ i 1))
-                                      (get lname-unique 0))
-                                  (get fname-unique i)))
-      (recur (inc i))))
-  (println))
+    [m topN]
+    (let [full-freq (get m :full-names)
+          fname-freq (get m :first-names)
+          lname-freq (get m :last-names)
+          fname-unique (get m :fname-unique)
+          lname-unique (get m :lname-unique)
+          modifiedN (count fname-unique)]
+      (do
+        (println (format "Unique Full Names:  %5s" (count full-freq)))
+        (println (format "Unique First Names: %5s" (count fname-freq)))
+        (println (format "Unique Last Names:  %5s" (count lname-freq)))
+        (println)
+        (println (str "Top " topN " First Names:"))
+        (doseq [fname (top-n fname-freq topN)]
+          (println (format "%-10s %s" (fname 0) (fname 1))))
+        (println)
+        (println (str "Top " topN " Last Names:"))
+        (doseq [lname (top-n lname-freq topN)]
+          (println (format "%-10s %s" (lname 0) (lname 1))))
+        (println)
+        (println (str "First " modifiedN " Unique Names:"))
+        (loop [i 0]
+          (when (< i modifiedN)
+            (println (format "%-15s %s" (if (< i (- modifiedN 1))
+                                            (get lname-unique (+ i 1))
+                                            (get lname-unique 0))
+                                        (get fname-unique i)))
+            (recur (inc i))))
+        (println))))
 
 (defn inc-freq
   "Increments the value associated with the given key k in map m. Returns a new
@@ -56,25 +52,49 @@
     (if line-parts
       [(line-parts 1) (line-parts 2)])))
 
+(defn update-unique-names
+  "Collects first modifiedN unique first and last names"
+  [m lName fName]
+    (let [fname-unique (into [] (get m :fname-unique))
+          lname-unique (into [] (get m :lname-unique))
+          modifiedN (get m :modifiedN)]
+      (if (and  (< (count fname-unique) modifiedN)
+                (not (contains? fname-unique fName))
+                (not (contains? lname-unique lName)))
+        (update
+          (update m
+            :lname-unique conj lName)
+            :fname-unique conj fName)
+        (identity m))))
+
+(defn update-counts
+  "Counts reducer function"
+  [m [lName fName]]
+    (update
+      (update
+        (update
+          (update-unique-names m lName fName)
+          :first-names inc-freq fName)
+          :last-names inc-freq lName)
+          :full-names inc-freq (format "%s, %s" fName lName)))
+
 (defn process-file
-  "Reads the input file and updates the frequency maps"
-  [path uniqueCount]
+  "Parses the input file and passes the extracted data to a counts reducer function"
+  [path modifiedN]
   (with-open [rdr (io/reader path)]
-    (doseq [line (line-seq rdr)]
-      (let [name-parts (process-line line)]
-        (if name-parts
-          (let [fName (name-parts 1) lName (name-parts 0)]
-            (def full-freq (inc-freq full-freq (format "%s, %s" fName lName)))
-            (def fname-freq (inc-freq fname-freq fName))
-            (def lname-freq (inc-freq lname-freq lName))
-            (if (and  (< (count fname-unique) uniqueCount)
-                      (not (contains? fname-unique fName))
-                      (not (contains? lname-unique lName)))
-              (do
-                (def fname-unique (conj fname-unique fName))
-                (def lname-unique (conj lname-unique lName))))))))))
+    (let [name-parts (remove nil? (map process-line (line-seq rdr)))
+          name-data (reduce update-counts {:first-names {}
+                                           :last-names {}
+                                           :full-names {}
+                                           :fname-unique []
+                                           :lname-unique []
+                                           :modifiedN modifiedN}
+                                           name-parts)]
+      name-data)))
 
 (defn -main
   [& args]
-  (process-file "resources/people-names-sample.txt" 25)
-  (print-results 10 25))
+  (let [topN 10
+        modifiedN 25
+        data-counts (process-file "resources/people-names.txt" modifiedN)]
+    (print-results data-counts topN)))
